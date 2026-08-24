@@ -1,125 +1,169 @@
-const { test, after, beforeEach } = require('node:test');
-const assert = require('node:assert')
+const { test, after, beforeEach } = require('node:test')
 const mongoose = require('mongoose')
 const supertest = require('supertest')
+const assert = require('node:assert')
 const app = require('../app')
+const Blog = require('../models/blog')
 const helper = require('./test_helper')
-const logger = require('../utils/logger.js')
+const {connect, disconnect} = require('../utils/middleware')
 const api = supertest(app)
 
-const Blog = require('../models/blog')
-
 beforeEach(async () => {
-    await Blog.deleteMany({})
-
-    helper.initialList.forEach(async (blog) => {
-        let blogPost = new Blog(blog)
-        await blogPost.save()
-    })
-    logger.info("done")
+  await connect()
+  await Blog.deleteMany({})
+  /*
+    for (let blog of helper.initial_blogs) {
+    let blogObject = new Blog(blog)
+    await blogObject.save()
+  }
+    */
+  await Blog.insertMany(helper.initial_blogs) 
+  await disconnect()
 })
 
-test('posts are returned as JSON', async () => {
-    await api
-    .get('/api/blogs')
+test('Artifacs are returned as json', async () => {
+  await api
+    .get('/api')
     .expect(200)
     .expect('Content-Type', /application\/json/)
 })
 
-test('post has the correct id', async () => {
-    const response = await helper.DB_List()
-    const instance = response[0]
-    if (instance.id){
-        assert(20<30)
-    }else{
-        assert(20>30,"Post should have a proper id")
-    }
+test('All artifacts are returned', async () => {
+  const response = await api.get('/api')
+
+  assert.strictEqual(response.body.length, helper.initial_blogs.length)
 })
 
-test('post parameter *likes has a base value of 0', async () => {
-    const newPost = {
-        title: "This is a quiz that you skip",
-        author: "Nokarto Veri",
-        url: "http://thisisareal.quis/orr"
-    }
-    
-    await api.post('/api/blogs').send(newPost)
-    
-    const response = await helper.DB_List()
-    const posted = response[2]
+test('A specific blog is within the returned artifacts', async () => {
+  const blogsAtStart = await helper.ArtifactsInDb()
+  const blogAtStart = blogsAtStart[0]
 
-    assert.strictEqual(posted.likes, 0)
+  const checkById = await api
+  .get(`/api/${blogAtStart.id}`)
+  .expect(200)
+  .expect('Content-Type', /application\/json/)
+
+  assert.deepStrictEqual(checkById.body, blogAtStart)
 })
 
-test('a valid post can be added', async () => {
-    const newPost = {
-        title: "No regrets on the front..end",
-        author: "Valillo Semino",
-        url: "http://no-more.net/post1",
-        likes: 0
+test('A valid blog can be added ', async () => {
+  const newBlog =    {
+        title: "New Title",
+        author: "Mon chier",
+        url: "https://noteworthy.con",
+        likes: 2
     }
 
-    await api
-    .post('/api/blogs')
-    .send(newPost)
+  await api
+    .post('/api')
+    .send(newBlog)
     .expect(201)
     .expect('Content-Type', /application\/json/)
+  
+  const blogsAtEnd = await helper.ArtifactsInDb()
 
-    const finalCond = await helper.DB_List()
-    
-    assert.strictEqual(finalCond.length, helper.initialList.length+1)
+  const titles = blogsAtEnd.map(k => k.title)
+
+  assert.strictEqual(blogsAtEnd.length, helper.initial_blogs.length + 1)
+
+  assert(titles.includes("New Title"))
 })
 
-test('post without content is not added', async () => {
-    const newPost = {
-        author: "Valillo Semino",
-        url: "http://no-more.net/post1",
-        likes: 0
-    }
+test('Blog with missing content is not added', async () => {
+  const newPost = {
+    title: ""
+  }
 
-    await api
-    .post('/api/blogs')
+  await api
+    .post('/api')
     .send(newPost)
     .expect(400)
 
-    const finalCond = await helper.DB_List()
+  const blogsAtEnd = await helper.ArtifactsInDb()
 
-    assert.strictEqual(finalCond.length, helper.initialList.length)
+  assert.strictEqual(blogsAtEnd.length, helper.initial_blogs.length)
 })
 
-test('a post can be deleted', async () => {
-    const pick = await helper.DB_List()
-    const select = pick[0]
-    //console.log(select.id)
+test('New Artifact has base value for likes', async () => {
+    const testBlog = {
+        title: "Test Blog",
+        author: "Belvie Fastorn",
+        url: "https://newman.con"
+    }
     await api
-    .delete(`/api/blogs/${select.id}`)
+    .post('/api')
+    .send(testBlog)
+    .expect(201)
+    .expect('Content-Type', /application\/json/)
+
+    const blogsAtEnd = await helper.ArtifactsInDb()
+    const newBlog = blogsAtEnd[3]
+
+    assert.strictEqual(newBlog.likes, 0)
+
+})
+
+test('An artifact can be deleted', async () => {
+  const blogsAtStart = await helper.ArtifactsInDb()
+  const blogToDelete = blogsAtStart[0]
+
+  await api
+    .delete(`/api/${blogToDelete.id}`)
     .expect(204)
 
-    const finalCond = await helper.DB_List()
-    const contents = finalCond.map(r => r.content)
-    assert(!contents.includes(select.id))
+  const blogsAtEnd = await helper.ArtifactsInDb()
 
-    assert.strictEqual(finalCond.length, helper.initialList.length-1)
+  const ids = blogsAtEnd.map(h => h.id)
+  assert(!ids.includes(blogToDelete.id))
+
+  assert.strictEqual(blogsAtEnd.length, helper.initial_blogs.length - 1)
 })
 
-test('casting a put request changes amount of likes', async () => {
-    const initialList = await helper.DB_List()
-    const select = initialList[0]
+test('Likes can be updated via put', async () => {
+  const blogsAtStart = await helper.ArtifactsInDb()
+  const blogToUpdate = blogsAtStart[0]
+  blogToUpdate.likes += 1
 
-    await api
-    .put(`/api/blogs/${select.id}`)
-    .send(select)
-    .expect(202)
+  await api
+    .put(`/api/${blogToUpdate.id}`)
+    .send(blogToUpdate)
+    .expect(200)
 
-    const finalCond = await helper.DB_List()
-    const fin = finalCond[0]
-    console.log("ender", fin)
+  const blogsAtEnd = await helper.ArtifactsInDb()
 
-    assert.strictEqual(fin.likes,select.likes+1)
+  const blog = blogsAtEnd.find(({id}) => id === blogToUpdate.id)
+
+  assert.strictEqual(blog.likes, blogToUpdate.likes)
+})
+
+test('Sending request to incorrect id returns error', async () => {
+    const testBlog = {
+        title: "Test Blog",
+        author: "Belvie Fastorn",
+        url: "https://newman.con",
+        id: "13212312"
+    }
+
+  const rDel = await api
+    .delete(`/api/13212312`)
+    .expect(400)
+
+  const rPut = await api
+    .put(`/api/13212312`)
+    .send(testBlog)
+    .expect(400)
+    
+  const rGet = await api
+    .get(`/api/13212312`)
+    .expect(400)
 
 
+
+  assert.strictEqual(rDel.error.text, '{"error":"malformated id"}')
+  assert.strictEqual(rPut.error.text, '{"error":"malformated id"}')
+  assert.strictEqual(rGet.error.text, '{"error":"malformated id"}')
 })
 
 after(async () => {
-    await mongoose.connection.close()
+  await mongoose.connection.close()
 })
